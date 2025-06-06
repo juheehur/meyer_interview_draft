@@ -72,11 +72,32 @@ export default function InterviewConductPage() {
       
       setInterview(data);
       
-      // 질문 파싱
+      // 질문 파싱 - admin이 수정한 새로운 형식과 기존 형식 모두 지원
       try {
-        const parsedQuestions = data.notes ? JSON.parse(data.notes) : [];
-        setQuestions(parsedQuestions);
+        if (data.notes) {
+          const parsedData = JSON.parse(data.notes);
+          
+          // 새로운 형식: {questions: [...], transcripts: [...]} 또는 {questions: [...]}
+          if (parsedData.questions && Array.isArray(parsedData.questions)) {
+            setQuestions(parsedData.questions);
+          }
+          // 중첩된 형식: {questions: {questions: [...], ...}}
+          else if (parsedData.questions && parsedData.questions.questions && Array.isArray(parsedData.questions.questions)) {
+            setQuestions(parsedData.questions.questions);
+          }
+          // 기존 형식: [...] (질문 배열)
+          else if (Array.isArray(parsedData)) {
+            setQuestions(parsedData);
+          }
+          // 단일 텍스트인 경우
+          else {
+            setQuestions([parsedData.toString()]);
+          }
+        } else {
+          setQuestions(['Tell me about yourself.']);
+        }
       } catch {
+        // JSON 파싱 실패 시 원본 텍스트를 단일 질문으로 사용
         setQuestions([data.notes || 'Tell me about yourself.']);
       }
       

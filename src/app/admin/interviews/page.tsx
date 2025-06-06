@@ -7,7 +7,7 @@ interface Interview {
   id: string;
   user_id: string;
   job_id: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'hired' | 'rejected';
   created_at: string;
   updated_at: string;
   notes?: string;
@@ -46,6 +46,19 @@ export default function InterviewsPage() {
   const [resumeText, setResumeText] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [isEditQuestionsModalOpen, setIsEditQuestionsModalOpen] = useState(false);
+  const [editingQuestions, setEditingQuestions] = useState<string[]>([]);
+  const [isSavingQuestions, setIsSavingQuestions] = useState(false);
+  const [isHRAnalysisModalOpen, setIsHRAnalysisModalOpen] = useState(false);
+  const [hrAnalysis, setHRAnalysis] = useState<any>(null);
+  const [hrAnalysisLoading, setHRAnalysisLoading] = useState(false);
+  const [selectedHRInterview, setSelectedHRInterview] = useState<Interview | null>(null);
+  const [isDecisionModalOpen, setIsDecisionModalOpen] = useState(false);
+  const [selectedDecisionInterview, setSelectedDecisionInterview] = useState<Interview | null>(null);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [decision, setDecision] = useState<'accepted' | 'rejected'>('accepted');
+  const [feedback, setFeedback] = useState('');
+  const [adminNotes, setAdminNotes] = useState('');
 
   useEffect(() => {
     fetchInterviews();
@@ -246,6 +259,10 @@ export default function InterviewsPage() {
         return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200';
       case 'completed':
         return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200';
+      case 'hired':
+        return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200';
+      case 'rejected':
+        return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
       case 'cancelled':
         return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200';
       default:
@@ -261,6 +278,10 @@ export default function InterviewsPage() {
         return 'In Progress';
       case 'completed':
         return 'Completed';
+      case 'hired':
+        return 'Hired';
+      case 'rejected':
+        return 'Rejected';
       case 'cancelled':
         return 'Cancelled';
       default:
@@ -292,6 +313,191 @@ export default function InterviewsPage() {
       alert('PDF 텍스트 추출에 실패했습니다.');
     }
     setPdfLoading(false);
+  };
+
+  const saveQuestions = async () => {
+    if (!viewingInterview || editingQuestions.length === 0) return;
+    
+    setIsSavingQuestions(true);
+    try {
+      // 기존 notes를 파싱해서 다른 데이터 보존
+      let existingData = {};
+      if (viewingInterview.notes) {
+        try {
+          existingData = JSON.parse(viewingInterview.notes);
+        } catch {
+          // JSON이 아니면 빈 객체로 시작
+        }
+      }
+
+      // 새로운 질문으로 업데이트
+      const updatedData = {
+        ...existingData,
+        questions: editingQuestions
+      };
+
+      const { error } = await supabase
+        .from('interviews')
+        .update({ notes: JSON.stringify(updatedData) })
+        .eq('id', viewingInterview.id);
+
+      if (error) {
+        throw error;
+      }
+
+      // 로컬 상태 업데이트
+      const updatedInterview = { 
+        ...viewingInterview, 
+        notes: JSON.stringify(updatedData) 
+      };
+      setViewingInterview(updatedInterview);
+      
+      // 인터뷰 목록도 업데이트
+      setInterviews(prev => 
+        prev.map(interview => 
+          interview.id === viewingInterview.id 
+            ? updatedInterview 
+            : interview
+        )
+      );
+
+      setIsEditQuestionsModalOpen(false);
+      alert('Questions updated successfully!');
+    } catch (error) {
+      console.error('Error saving questions:', error);
+      alert('Failed to save questions. Please try again.');
+    } finally {
+      setIsSavingQuestions(false);
+    }
+  };
+
+  const openEditQuestions = (interview: Interview) => {
+    try {
+      if (interview.notes) {
+        const data = JSON.parse(interview.notes);
+        // 질문 배열 추출
+        if (data.questions) {
+          setEditingQuestions([...data.questions]);
+        } else if (Array.isArray(data)) {
+          setEditingQuestions([...data]);
+        } else {
+          setEditingQuestions(['Tell me about yourself.']);
+        }
+      } else {
+        setEditingQuestions(['Tell me about yourself.']);
+      }
+    } catch {
+      setEditingQuestions(['Tell me about yourself.']);
+    }
+    setViewingInterview(interview);
+    setIsEditQuestionsModalOpen(true);
+  };
+
+  const addQuestion = () => {
+    setEditingQuestions(prev => [...prev, '']);
+  };
+
+  const removeQuestion = (index: number) => {
+    setEditingQuestions(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const updateQuestion = (index: number, value: string) => {
+    setEditingQuestions(prev => 
+      prev.map((question, i) => i === index ? value : question)
+    );
+  };
+
+  const viewHRAnalysis = async (interview: Interview) => {
+    setSelectedHRInterview(interview);
+    setHRAnalysisLoading(true);
+    setIsHRAnalysisModalOpen(true);
+
+    try {
+      // First, try to get existing analysis
+      const response = await fetch(`/api/interviews/${interview.id}/analyze`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        setHRAnalysis(data.analysis);
+      } else if (response.status === 404) {
+        // No analysis exists, generate new one
+        const analyzeResponse = await fetch(`/api/interviews/${interview.id}/analyze`, {
+          method: 'POST'
+        });
+        
+        if (analyzeResponse.ok) {
+          const analyzeData = await analyzeResponse.json();
+          setHRAnalysis(analyzeData.analysis);
+        } else {
+          const errorData = await analyzeResponse.json();
+          alert(`Failed to generate analysis: ${errorData.error}`);
+        }
+      } else {
+        const errorData = await response.json();
+        alert(`Error: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error('Error fetching HR analysis:', error);
+      alert('Failed to load HR analysis. Please try again.');
+    } finally {
+      setHRAnalysisLoading(false);
+    }
+  };
+
+  const closeHRAnalysis = () => {
+    setIsHRAnalysisModalOpen(false);
+    setSelectedHRInterview(null);
+    setHRAnalysis(null);
+  };
+
+  const getScoreColor = (score: number) => {
+    if (score >= 8) return 'text-green-600';
+    if (score >= 6) return 'text-yellow-600';
+    return 'text-red-600';
+  };
+
+  const makeDecision = (interview: Interview) => {
+    setSelectedDecisionInterview(interview);
+    setIsDecisionModalOpen(true);
+  };
+
+  const closeDecision = () => {
+    setIsDecisionModalOpen(false);
+    setSelectedDecisionInterview(null);
+  };
+
+  const submitDecision = async (decision: 'accepted' | 'rejected', feedback: string, adminNotes: string) => {
+    if (!selectedDecisionInterview) return;
+
+    setDecisionLoading(true);
+    try {
+      const response = await fetch(`/api/interviews/${selectedDecisionInterview.id}/decision`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          decision,
+          feedback,
+          admin_notes: adminNotes
+        }),
+      });
+
+      if (response.ok) {
+        // Refresh interviews list
+        fetchInterviews();
+        closeDecision();
+        alert(`Interview ${decision === 'accepted' ? 'approved' : 'rejected'} successfully!`);
+      } else {
+        const errorData = await response.json();
+        alert(`Error: ${errorData.error}`);
+      }
+    } catch (error) {
+      console.error('Error submitting decision:', error);
+      alert('Failed to submit decision. Please try again.');
+    } finally {
+      setDecisionLoading(false);
+    }
   };
 
   return (
@@ -370,6 +576,33 @@ export default function InterviewsPage() {
                       >
                         View
                       </button>
+                      {interview.status === 'completed' && (
+                        <button
+                          type="button"
+                          onClick={() => viewHRAnalysis(interview)}
+                          className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 mr-4"
+                        >
+                          HR Analysis
+                        </button>
+                      )}
+                      {interview.status === 'completed' && (
+                        <button
+                          type="button"
+                          onClick={() => makeDecision(interview)}
+                          className="text-purple-600 hover:text-purple-900 dark:text-purple-400 dark:hover:text-purple-300 mr-4"
+                        >
+                          Make Decision
+                        </button>
+                      )}
+                      {interview.status === 'pending' && interview.notes && (
+                        <button
+                          type="button"
+                          onClick={() => openEditQuestions(interview)}
+                          className="text-purple-600 hover:text-purple-900 dark:text-purple-400 dark:hover:text-purple-300 mr-4"
+                        >
+                          Edit Questions
+                        </button>
+                      )}
                       {interview.status === 'pending' && (
                         <button
                           type="button"
@@ -470,6 +703,8 @@ export default function InterviewsPage() {
                     <option value="pending">Pending</option>
                     <option value="in_progress">In Progress</option>
                     <option value="completed">Completed</option>
+                    <option value="hired">Hired</option>
+                    <option value="rejected">Rejected</option>
                     <option value="cancelled">Cancelled</option>
                   </select>
                 </div>
@@ -547,179 +782,679 @@ export default function InterviewsPage() {
 
       {/* View Modal */}
       {isViewModalOpen && viewingInterview && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white dark:bg-gray-800">
-            <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4">
-                Interview Details
-              </h3>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Candidate:
-                  </label>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {viewingInterview.users?.email || '-'}
-                  </p>
-                </div>
-                
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Job Position:
-                  </label>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {viewingInterview.jobs?.title || '-'}
-                  </p>
-                </div>
+        <div className="fixed inset-0 bg-gray-100 dark:bg-gray-900 overflow-hidden z-50">
+          {/* Header */}
+          <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-4 py-4 sm:px-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <button
+                  onClick={() => setIsViewModalOpen(false)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                  </svg>
+                </button>
+                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                  Interview Details
+                </h2>
+              </div>
+              {viewingInterview.status === 'completed' && (
+                <button
+                  type="button"
+                  className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  onClick={() => {
+                    alert('Video playback feature will be added in future updates');
+                  }}
+                >
+                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  View Recording
+                </button>
+              )}
+            </div>
+          </div>
 
+          {/* Main Content */}
+          <div className="flex h-[calc(100vh-4rem)]">
+            {/* Left Sidebar - Interview Info */}
+            <div className="w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
+              <div className="p-6 space-y-6">
+                {/* Status Badge */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Status:
-                  </label>
-                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusBadgeColor(viewingInterview.status)}`}>
+                  <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Status</div>
+                  <span className={`px-3 py-1 inline-flex text-sm font-medium rounded-full ${getStatusBadgeColor(viewingInterview.status)}`}>
                     {getStatusText(viewingInterview.status)}
                   </span>
                 </div>
 
+                {/* Candidate Info */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Created Date:
-                  </label>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {new Date(viewingInterview.created_at).toLocaleDateString()}
-                  </p>
+                  <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Candidate</div>
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                    <div className="text-base font-medium text-gray-900 dark:text-white">
+                      {viewingInterview.users?.email || '-'}
+                    </div>
+                  </div>
                 </div>
 
+                {/* Job Info */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Last Updated:
-                  </label>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {new Date(viewingInterview.updated_at).toLocaleDateString()}
-                  </p>
+                  <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Position</div>
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                    <div className="text-base font-medium text-gray-900 dark:text-white">
+                      {viewingInterview.jobs?.title || '-'}
+                    </div>
+                  </div>
                 </div>
 
-                {/* Interview Questions and Transcripts (for completed interviews) */}
-                {viewingInterview.status === 'completed' && viewingInterview.notes && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Interview Results:
-                    </label>
-                    <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 max-h-96 overflow-y-auto">
-                      {(() => {
-                        try {
-                          const interviewData = JSON.parse(viewingInterview.notes);
-                          
-                          // 새로운 형식 (questions + transcripts)
-                          if (interviewData.questions && interviewData.transcripts) {
-                            return (
-                              <div className="space-y-4">
-                                {interviewData.questions.map((question: string, index: number) => (
-                                  <div key={index} className="border-b border-gray-200 dark:border-gray-600 pb-4 last:border-b-0">
-                                    <div className="mb-2">
-                                      <span className="inline-block bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs font-medium px-2 py-1 rounded">
-                                        Q{index + 1}
-                                      </span>
+                {/* Dates */}
+                <div>
+                  <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Interview Timeline</div>
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 space-y-2">
+                    <div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Created</div>
+                      <div className="text-sm font-medium text-gray-900 dark:text-white">
+                        {new Date(viewingInterview.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Last Updated</div>
+                      <div className="text-sm font-medium text-gray-900 dark:text-white">
+                        {new Date(viewingInterview.updated_at).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Content - Questions */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="max-w-5xl mx-auto p-6">
+                {/* Questions Header */}
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+                    {viewingInterview.status === 'completed' ? '📝 Interview Results' : '❓ Interview Questions'}
+                  </h3>
+                  {viewingInterview.status !== 'completed' && (
+                    <button
+                      onClick={() => openEditQuestions(viewingInterview)}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors dark:text-blue-400 dark:bg-blue-900/20 dark:hover:bg-blue-900/40"
+                    >
+                      <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                      Edit Questions
+                    </button>
+                  )}
+                </div>
+
+                {/* Questions Content */}
+                <div className="space-y-6">
+                  {viewingInterview.notes && (() => {
+                    try {
+                      const interviewData = JSON.parse(viewingInterview.notes);
+                      
+                      // 새로운 형식 (questions + transcripts)
+                      if (interviewData.questions && interviewData.transcripts) {
+                        return (
+                          <>
+                            {/* Status Banner */}
+                            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4 mb-8">
+                              <div className="flex items-center">
+                                <div className="flex-shrink-0">
+                                  <svg className="w-6 h-6 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                </div>
+                                <div className="ml-3">
+                                  <h3 className="text-lg font-bold text-green-800 dark:text-green-200">
+                                    ✅ Interview Completed Successfully
+                                  </h3>
+                                  <p className="text-sm text-green-700 dark:text-green-300">
+                                    All questions answered with speech-to-text analysis completed
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Questions Grid */}
+                            <div className="grid grid-cols-1 gap-6">
+                              {interviewData.questions.map((question: string, index: number) => (
+                                <div key={index} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-sm">
+                                  <div className="p-6">
+                                    <div className="flex items-start space-x-4">
+                                      <div className="flex-shrink-0">
+                                        <div className="w-12 h-12 bg-blue-500 text-white rounded-full flex items-center justify-center text-xl font-bold">
+                                          {index + 1}
+                                        </div>
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <h4 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 leading-relaxed">
+                                          {question}
+                                        </h4>
+                                        <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                                          <div className="flex items-center mb-3">
+                                            <svg className="w-5 h-5 text-gray-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-3.582 8-8 8a8.959 8.959 0 01-4.906-1.444l-3.5 2.18c-.371.231-.85-.101-.85-.492V13.5A8 8 0 1121 12z" />
+                                            </svg>
+                                            <span className="text-base font-medium text-gray-700 dark:text-gray-300">
+                                              Candidate's Response:
+                                            </span>
+                                          </div>
+                                          <p className="text-lg text-gray-800 dark:text-gray-200 leading-relaxed">
+                                            {interviewData.transcripts[index] || (
+                                              <span className="text-gray-500 italic">No response recorded</span>
+                                            )}
+                                          </p>
+                                        </div>
+                                      </div>
                                     </div>
-                                    <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-2">
-                                      {question}
-                                    </h4>
-                                    <div className="bg-gray-100 dark:bg-gray-800 p-3 rounded text-sm">
-                                      <p className="text-gray-700 dark:text-gray-300">
-                                        <strong>Response:</strong> {interviewData.transcripts[index] || 'No response recorded'}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Completion Time */}
+                            {interviewData.completed_at && (
+                              <div className="mt-8 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                                <div className="flex items-center">
+                                  <svg className="w-5 h-5 text-blue-600 dark:text-blue-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  <span className="text-base font-medium text-blue-800 dark:text-blue-200">
+                                    Completed: {new Date(interviewData.completed_at).toLocaleString('en-US', {
+                                      year: 'numeric',
+                                      month: 'long',
+                                      day: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit'
+                                    })}
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      }
+                      
+                      // 기존 형식 (질문만 있는 경우)
+                      else if (Array.isArray(interviewData)) {
+                        return (
+                          <>
+                            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4 mb-8">
+                              <div className="flex items-center">
+                                <svg className="w-6 h-6 text-yellow-600 dark:text-yellow-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                <span className="text-lg font-medium text-yellow-800 dark:text-yellow-200">
+                                  📋 Interview Questions Ready
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-4">
+                              {interviewData.map((question, index) => (
+                                <div key={index} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 shadow-sm">
+                                  <div className="flex items-start space-x-4">
+                                    <div className="flex-shrink-0">
+                                      <div className="w-12 h-12 bg-indigo-500 text-white rounded-full flex items-center justify-center text-xl font-bold">
+                                        {index + 1}
+                                      </div>
+                                    </div>
+                                    <div className="flex-1">
+                                      <p className="text-xl text-gray-900 dark:text-white leading-relaxed">
+                                        {question}
                                       </p>
                                     </div>
                                   </div>
-                                ))}
-                                {interviewData.completed_at && (
-                                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-4">
-                                    Completed: {new Date(interviewData.completed_at).toLocaleString()}
-                                  </div>
-                                )}
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        );
+                      }
+                      
+                      // 새로운 형식에서 질문만 있는 경우
+                      else if (interviewData.questions) {
+                        return (
+                          <>
+                            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-8">
+                              <div className="flex items-center">
+                                <svg className="w-6 h-6 text-blue-600 dark:text-blue-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                </svg>
+                                <span className="text-lg font-medium text-blue-800 dark:text-blue-200">
+                                  🤖 AI Generated Questions
+                                </span>
                               </div>
-                            );
-                          }
-                          
-                          // 기존 형식 (질문만 있는 경우)
-                          else if (Array.isArray(interviewData)) {
-                            return (
-                              <ol className="list-decimal list-inside space-y-2">
-                                {interviewData.map((question, index) => (
-                                  <li key={index} className="text-sm text-gray-700 dark:text-gray-300">
-                                    {question}
-                                  </li>
-                                ))}
-                              </ol>
-                            );
-                          }
-                          
-                          // 일반 텍스트
-                          else {
-                            return (
-                              <p className="text-sm text-gray-700 dark:text-gray-300">
-                                {viewingInterview.notes}
-                              </p>
-                            );
-                          }
-                        } catch {
-                          return (
-                            <p className="text-sm text-gray-700 dark:text-gray-300">
-                              {viewingInterview.notes}
-                            </p>
-                          );
-                        }
-                      })()}
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-4">
+                              {interviewData.questions.map((question: string, index: number) => (
+                                <div key={index} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 shadow-sm">
+                                  <div className="flex items-start space-x-4">
+                                    <div className="flex-shrink-0">
+                                      <div className="w-12 h-12 bg-green-500 text-white rounded-full flex items-center justify-center text-xl font-bold">
+                                        {index + 1}
+                                      </div>
+                                    </div>
+                                    <div className="flex-1">
+                                      <p className="text-xl text-gray-900 dark:text-white leading-relaxed">
+                                        {question}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        );
+                      }
+                      
+                      return null;
+                    } catch {
+                      return null;
+                    }
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Questions Modal */}
+      {isEditQuestionsModalOpen && viewingInterview && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-10 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white dark:bg-gray-800">
+            <div className="mt-3">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                  Edit Interview Questions
+                </h3>
+                <button
+                  onClick={() => setIsEditQuestionsModalOpen(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={isSavingQuestions}
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Job: <span className="font-medium">{viewingInterview.jobs?.title}</span>
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Candidate: <span className="font-medium">{viewingInterview.users?.email}</span>
+                </p>
+              </div>
+
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {editingQuestions.map((question, index) => (
+                  <div key={index} className="flex items-start space-x-3">
+                    <div className="flex-shrink-0 w-8 h-8 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded-full flex items-center justify-center text-sm font-medium">
+                      {index + 1}
                     </div>
-                    {viewingInterview.status === 'completed' && (
-                      <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-md">
-                        <div className="flex items-center">
-                          <svg className="w-5 h-5 text-green-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <p className="text-sm text-green-800 dark:text-green-200 font-medium">
-                            Interview completed successfully with speech-to-text analysis
-                          </p>
-                        </div>
-                        <p className="text-sm text-green-700 dark:text-green-300 mt-1">
-                          The candidate answered all questions (max 1 minute per response) and their responses have been transcribed for analysis.
-                        </p>
-                      </div>
+                    <div className="flex-1">
+                      <textarea
+                        value={question}
+                        onChange={(e) => updateQuestion(index, e.target.value)}
+                        rows={2}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        placeholder={`Question ${index + 1}...`}
+                        disabled={isSavingQuestions}
+                      />
+                    </div>
+                    {editingQuestions.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeQuestion(index)}
+                        className="flex-shrink-0 text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                        disabled={isSavingQuestions}
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                     )}
                   </div>
-                )}
+                ))}
+              </div>
 
-                {/* Notes for other statuses */}
-                {viewingInterview.status !== 'completed' && viewingInterview.notes && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Notes:
-                    </label>
-                    <p className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap">
-                      {viewingInterview.notes}
+              <div className="mt-4 flex justify-between items-center">
+                <button
+                  type="button"
+                  onClick={addQuestion}
+                  className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-600"
+                  disabled={isSavingQuestions}
+                >
+                  <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  Add Question
+                </button>
+                
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  {editingQuestions.length} question{editingQuestions.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-6 border-t border-gray-200 dark:border-gray-600">
+                <button
+                  type="button"
+                  onClick={saveQuestions}
+                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  disabled={isSavingQuestions || editingQuestions.some(q => !q.trim())}
+                >
+                  {isSavingQuestions ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                      </svg>
+                      Saving...
+                    </>
+                  ) : (
+                    'Save Questions'
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditQuestionsModalOpen(false)}
+                  className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  disabled={isSavingQuestions}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HR Analysis Modal */}
+      {isHRAnalysisModalOpen && selectedHRInterview && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-10 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white dark:bg-gray-800">
+            <div className="mt-3">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                  HR Analysis
+                </h3>
+                <button
+                  onClick={closeHRAnalysis}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={hrAnalysisLoading}
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="mb-4">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Job: <span className="font-medium">{selectedHRInterview.jobs?.title}</span>
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Candidate: <span className="font-medium">{selectedHRInterview.users?.email}</span>
+                </p>
+              </div>
+
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {hrAnalysisLoading ? (
+                  <div className="text-center py-12">
+                    <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-600 dark:text-gray-400">Analyzing interview...</p>
+                  </div>
+                ) : hrAnalysis ? (
+                  <div className="space-y-6">
+                    {/* Overall Score and Recommendation */}
+                    <div className="bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                          Overall Score
+                        </span>
+                        <span className={`text-xl font-bold ${getScoreColor(hrAnalysis.overall_assessment?.overall_score || 0)}`}>
+                          {hrAnalysis.overall_assessment?.overall_score || 0}/10
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        {hrAnalysis.overall_assessment?.recommendation || 'No recommendation available'}
+                      </p>
+                    </div>
+
+                    {/* HR Highlights */}
+                    {hrAnalysis.hr_highlights && hrAnalysis.hr_highlights.length > 0 && (
+                      <div>
+                        <h4 className="font-medium text-gray-900 dark:text-white mb-3">
+                          Key Highlights for HR Review
+                        </h4>
+                        <div className="space-y-2">
+                          {hrAnalysis.hr_highlights.map((highlight: any, index: number) => (
+                            <div key={index} className="flex items-start space-x-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                              <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${
+                                highlight.category === 'strength' ? 'bg-green-500' : 
+                                highlight.category === 'concern' ? 'bg-red-500' : 'bg-blue-500'
+                              }`}></div>
+                              <div>
+                                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
+                                  {highlight.timestamp}
+                                </p>
+                                <p className="text-sm text-blue-800 dark:text-blue-300">
+                                  {highlight.highlight}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Skills Summary */}
+                    {hrAnalysis.skills && (
+                      <div>
+                        <h4 className="font-medium text-gray-900 dark:text-white mb-3">
+                          Skills Assessment
+                        </h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          {hrAnalysis.skills.technical && hrAnalysis.skills.technical.length > 0 && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Technical Skills</p>
+                              <div className="flex flex-wrap gap-1">
+                                {hrAnalysis.skills.technical.map((skill: string, index: number) => (
+                                  <span key={index} className="px-2 py-1 bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200 text-xs">
+                                    {skill}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {hrAnalysis.skills.soft && hrAnalysis.skills.soft.length > 0 && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Soft Skills</p>
+                              <div className="flex flex-wrap gap-1">
+                                {hrAnalysis.skills.soft.map((skill: string, index: number) => (
+                                  <span key={index} className="px-2 py-1 bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200 text-xs">
+                                    {skill}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Communication Analysis */}
+                    {hrAnalysis.language_analysis && (
+                      <div>
+                        <h4 className="font-medium text-gray-900 dark:text-white mb-3">
+                          Communication Quality
+                        </h4>
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="text-center">
+                            <div className={`text-lg font-bold ${getScoreColor(hrAnalysis.language_analysis.clarity_score / 10)}`}>
+                              {hrAnalysis.language_analysis.clarity_score}%
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">Clarity</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-gray-700 dark:text-gray-300">
+                              {hrAnalysis.language_analysis.filler_words_count}
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">Filler Words</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-gray-700 dark:text-gray-300">
+                              {hrAnalysis.language_analysis.repetition_issues}
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">Repetitions</div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Quick Decision Helper */}
+                    <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                      <h4 className="font-medium text-yellow-900 dark:text-yellow-200 mb-2">
+                        HR Decision Helper
+                      </h4>
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <p className="font-medium text-green-700 dark:text-green-400 mb-1">Strengths:</p>
+                          <ul className="text-gray-600 dark:text-gray-400 space-y-1">
+                            {hrAnalysis.overall_assessment?.strengths?.slice(0, 3).map((strength: string, index: number) => (
+                              <li key={index}>• {strength}</li>
+                            )) || <li>No strengths identified</li>}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="font-medium text-amber-700 dark:text-amber-400 mb-1">Areas to Discuss:</p>
+                          <ul className="text-gray-600 dark:text-gray-400 space-y-1">
+                            {hrAnalysis.overall_assessment?.areas_for_improvement?.slice(0, 3).map((area: string, index: number) => (
+                              <li key={index}>• {area}</li>
+                            )) || <li>No areas identified</li>}
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-12">
+                    <p className="text-gray-600 dark:text-gray-400">
+                      Failed to load analysis. Please try again.
                     </p>
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-              <div className="flex space-x-2 pt-4">
-                {viewingInterview.status === 'completed' && (
-                  <button
-                    type="button"
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    onClick={() => {
-                      // TODO: 향후 비디오 재생이나 상세 분석 페이지로 이동
-                      alert('Video playback feature will be added in future updates');
-                    }}
+      {/* Decision Modal */}
+      {isDecisionModalOpen && selectedDecisionInterview && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-10 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white dark:bg-gray-800">
+            <div className="mt-3">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+                  Interview Decision
+                </h3>
+                <button
+                  onClick={closeDecision}
+                  className="text-gray-400 hover:text-gray-600"
+                  disabled={decisionLoading}
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="mb-6">
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Job: <span className="font-medium">{selectedDecisionInterview.jobs?.title}</span>
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Candidate: <span className="font-medium">{selectedDecisionInterview.users?.email}</span>
+                </p>
+              </div>
+
+              <div className="space-y-6">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Decision
+                  </label>
+                  <select
+                    value={decision}
+                    onChange={(e) => setDecision(e.target.value as 'accepted' | 'rejected')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-[#023da6] focus:border-[#023da6] dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                   >
-                    View Recording
-                  </button>
-                )}
+                    <option value="accepted">Accepted</option>
+                    <option value="rejected">Rejected</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Feedback
+                  </label>
+                  <textarea
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-[#023da6] focus:border-[#023da6] dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    placeholder="Add any feedback about the interview..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Admin Notes
+                  </label>
+                  <textarea
+                    value={adminNotes}
+                    onChange={(e) => setAdminNotes(e.target.value)}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-[#023da6] focus:border-[#023da6] dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    placeholder="Add any admin notes about the interview..."
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-between items-center">
                 <button
                   type="button"
-                  onClick={() => setIsViewModalOpen(false)}
-                  className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  onClick={() => submitDecision(decision, feedback, adminNotes)}
+                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  disabled={decisionLoading}
                 >
-                  Close
+                  {decisionLoading ? (
+                    <>
+                      <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"></path>
+                      </svg>
+                      Submitting...
+                    </>
+                  ) : (
+                    'Submit Decision'
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeDecision}
+                  className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-300"
+                  disabled={decisionLoading}
+                >
+                  Cancel
                 </button>
               </div>
             </div>
